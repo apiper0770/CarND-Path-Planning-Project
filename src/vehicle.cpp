@@ -77,12 +77,28 @@ vector<string> Vehicle::successor_states() {
             states.push_back("PLCL");
             states.push_back("LCL");
         }
+        else if (lane != lanes_available - 1) {
+            states.push_back("PLCR");
+            states.push_back("LCR");
+        }
+        else{
+            states.push_back("KL");
+        }
     } else if (state.compare("PLCR") == 0) {
         if (lane != lanes_available - 1) {
             states.push_back("PLCR");
             states.push_back("LCR");
         }
-    }
+        else if (lane != 0) {
+            states.push_back("PLCL");
+            states.push_back("LCL");
+        }
+        else {
+            states.push_back("KL");
+        } 
+    }else if (state.compare("LCL") || state.compare("LCR")){
+        states.push_back("KL");
+    } 
     //If state is "LCL" or "LCR", then just return "KL"
     return states;
 }
@@ -166,7 +182,7 @@ vector<Vehicle> Vehicle::prep_lane_change_trajectory(string state, map<int, vect
     double new_v;
     double new_a;
     Vehicle vehicle_behind;
-    int new_lane = this->lane + lane_direction[state];
+    int new_lane = this->lane; //+ lane_direction[state];
     vector<Vehicle> trajectory = {Vehicle(this->lane, this->s, this->v, this->a, this->state)};
     vector<double> curr_lane_new_kinematics = get_kinematics(predictions, this->lane);
 

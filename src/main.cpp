@@ -347,7 +347,7 @@ int main() {
                                 lane = 1;
                             }
                             */
-                            
+                            /*
                             //create a vehicle class for ego_car and its values
                             Vehicle ego_car = Vehicle(lane, car_s, car_speed, total_accel, state);
                             ego_car.lanes_available = 3;
@@ -393,12 +393,59 @@ int main() {
                              //state = ego_car.state;
                              //New veloctiy of car
                              cout << "New ref_vel: " << ego_car.v << endl;
-                             
+                             */
 
                         }
                      }
                      
 	        }
+                 //create a vehicle class for ego_car and its values
+                            Vehicle ego_car = Vehicle(lane, car_s, car_speed, total_accel, state);
+                            ego_car.lanes_available = 3;
+                            ego_car.target_speed = 50;
+                            //initialize a map of predictions for the vehicles around ego_car
+                            map <int, vector<Vehicle>> predictions;
+                            for ( int j = 0; j < sensor_fusion.size(); j++)
+                            {
+                                double other_d = sensor_fusion[j][6];
+                                int other_car_lane;
+                                if(other_d >= 0.0 && other_d < 4.0){
+                                    other_car_lane = 0;
+                                }
+                                else if(other_d >= 4.0 && other_d < 8.0){
+                                    other_car_lane = 1;
+                                }
+                                else{
+                                    other_car_lane = 2;
+                                }
+                                double other_car_s = sensor_fusion[j][5];
+                                double other_vx = sensor_fusion[j][3];
+                                double other_vy = sensor_fusion[j][4];
+                                double other_car_speed = sqrt(other_vx*other_vx + other_vy*other_vy);
+                                double other_car_v = other_car_speed;
+                                double other_car_a = total_accel;
+                                string other_car_state = "KL";
+
+                                Vehicle other_car = Vehicle(other_car_lane, other_car_s, other_car_v, other_car_a, other_car_state);
+                                vector<Vehicle> preds = other_car.generate_predictions();
+                                predictions[j] = preds;
+                            }
+                            //set new values and state of ego car
+                             vector<Vehicle> data = ego_car.choose_next_state(predictions);
+                             ego_car.realize_next_state(data);
+
+                             //pass ego car state values to associated parameters
+                             cout << "Lane #: " << ego_car.lane << endl;
+                            // state = ego_car.lane;
+                             //set car lane
+                             lane = ego_car.lane;
+                             //New state of car
+                             cout << " New State: " << ego_car.state << endl;
+                             state = ego_car.state;
+                             //New veloctiy of car
+                             cout << "New ref_vel: " << ego_car.v << endl;
+                             
+
                 /*
                 auto lane_pos = std::max_element(std::begin(lane_speeds), std::end(lane_speeds));
 
