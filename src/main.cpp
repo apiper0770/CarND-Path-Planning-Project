@@ -8,6 +8,10 @@
 #include "Eigen-3.3/Eigen/Core"
 #include "Eigen-3.3/Eigen/QR"
 #include "json.hpp"
+#include "spline.h"
+#include "vehicle.h"
+#include <string>
+
 
 using namespace std;
 
@@ -163,6 +167,47 @@ vector<double> getXY(double s, double d, const vector<double> &maps_s, const vec
 
 }
 
+//behavior planning.  Determine whether we need to change lanes left or right or keep lane.
+/*
+  vehicle_behavior(){
+      switch(){
+          case keep_lane:
+              //code
+              break;
+     
+          case CL_Left:
+              if(lane >= 1){
+                 lane -= 1;
+              }
+              break;
+ 
+          case CL_Right:
+              if(lane <=1){
+                  lane += 1;
+              }
+ 
+              break;
+          
+      }
+
+}
+*/
+//PID controller to match speed of the vehicle that we are following
+/* 
+speed_controller(double dist, double double match_speed, double current_speed){
+     
+     static double p_wgt = 0.01;
+     static double i_wgt = 0.01;
+     static double d_wgt = 0.01;
+     double d_error = match_speed - current_speed;
+     double i_error = 
+     double PID =  * p_wgt + d_error * d_wgt + i_error * i_wgt;
+
+     return PID;
+
+ }
+*/
+
 int main() {
   uWS::Hub h;
 
@@ -199,9 +244,22 @@ int main() {
   	map_waypoints_dx.push_back(d_x);
   	map_waypoints_dy.push_back(d_y);
   }
+  //desired lane to be in during driving.  Lane to start in.   
+  int lane = 1;
 
-  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
-                     uWS::OpCode opCode) {
+  //desired maximum speed to be traveling at
+  double ref_vel = 0;
+
+  //Initialize starting vehicle state, KL=keep lane, PLCL=prepare lane chance left, PLCR=prepare lane change right, LCL=lane change left, LCR= lane change right
+  string state = "KL";
+
+  //Initialize the maximum acceleration of the vehicle in m/s^2
+  double total_accel = 9.5;
+
+  //Initialize a estimation class
+  //GNB gnb = GNB();
+
+  h.onMessage([&ref_vel,&state,&total_accel,&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy,&lane](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length, uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
     // The 2 signifies a websocket event
@@ -243,8 +301,293 @@ int main() {
           	vector<double> next_y_vals;
 
 
-          	// TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
-          	msgJson["next_x"] = next_x_vals;
+          	// define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
+          	// Previous path size
+                int prev_size = previous_path_x.size();
+
+                if(prev_size >0)
+                {
+                    car_s = end_path_s;
+                }
+
+	        bool too_close = false;
+
+                //std::vector<double> lane_speeds {-1,-1,-1};
+
+                //find ref_vel to use
+	        for(int i=0; i < sensor_fusion.size(); i++)
+	        {
+                    //assign car_d value to d
+		    double d = sensor_fusion[i][6];
+                    //double vx = sensor_fusion[i][3];
+                    //double vy = sensor_fusion[i][4];
+                    //double check_speed = sqrt(vx*vx+vy*vy);
+                    //double check_car_s = sensor_fusion[i][5];
+                    
+                    //car is in my lane
+		    if ( d < (2+4*lane+2) && d > (2+4*lane-2) )
+		    {
+			double vx = sensor_fusion[i][3];
+			double vy = sensor_fusion[i][4];
+			double check_speed = sqrt(vx*vx+vy*vy);
+			double check_car_s = sensor_fusion[i][5];
+
+			check_car_s += ((double)prev_size* 0.02 *check_speed);
+			if ((check_car_s > car_s) && ((check_car_s - car_s) < 20))
+			{
+		            //also raise flag to change lane
+		            //ref_vel = 29.5;//MPH
+                            too_close = true;
+                            
+                            /*
+                            if(lane > 0){
+                                lane = 0;
+                            }
+                            else{
+                                lane = 1;
+                            }
+                            */
+                            
+                            //create a vehicle class for ego_car and its values
+                            Vehicle ego_car = Vehicle(lane, car_s, car_speed, total_accel, state);
+                            ego_car.lanes_available = 3;
+                            ego_car.target_speed = 50;
+                            //initialize a map of predictions for the vehicles around ego_car 
+                            map <int, vector<Vehicle>> predictions;
+                            for ( int j = 0; j < sensor_fusion.size(); j++)
+                            {   
+                                double other_d = sensor_fusion[j][6];
+                                int other_car_lane;
+                                if(other_d >= 0.0 && other_d < 4.0){
+                                    other_car_lane = 0;
+                                }
+                                else if(other_d >= 4.0 && other_d < 8.0){
+                                    other_car_lane = 1;
+                                }
+                                else{
+                                    other_car_lane = 2;
+                                }
+                                double other_car_s = sensor_fusion[j][5];
+                                double other_vx = sensor_fusion[j][3];
+                                double other_vy = sensor_fusion[j][4];
+                                double other_car_speed = sqrt(vx*vx+vy*vy);
+                                double other_car_v = other_car_speed;
+                                double other_car_a = total_accel;
+                                string other_car_state = "KL";
+
+                                Vehicle other_car = Vehicle(other_car_lane, other_car_s, other_car_v, other_car_a, other_car_state);   
+                                vector<Vehicle> preds = other_car.generate_predictions();
+                                predictions[j] = preds;
+                            }
+                            //set new values and state of ego car
+                             vector<Vehicle> data = ego_car.choose_next_state(predictions);
+                             ego_car.realize_next_state(data);
+                             
+                             //pass ego car state values to associated parameters
+                             cout << "Lane #: " << ego_car.lane << endl;
+                            // state = ego_car.lane;
+                             //set car lane
+                             lane = ego_car.lane;
+                             //New state of car
+                             cout << " New State: " << ego_car.state << endl;
+                             //state = ego_car.state;
+                             //New veloctiy of car
+                             cout << "New ref_vel: " << ego_car.v << endl;
+                             
+
+                        }
+                     }
+                     
+	        }
+                /*
+                auto lane_pos = std::max_element(std::begin(lane_speeds), std::end(lane_speeds));
+
+                int intended_lane = std::distance(std::begin(lane_speeds), lane_pos);
+                //check for the new fastest lane
+                if(intended_lane != lane){
+                    lane = intended_lane;
+                }
+                //car is in fastest lane and there is another car causing the vehicle to drive slower
+                //keep lane functionality and flow behind other vehicle at suitable distance
+                else{
+                    // ref_vel = check_speed;
+                }
+                */
+                /*                 
+                if(too_close)
+                {
+                    ref_vel -= 0.224;
+                }
+                else if(ref_vel < 49.5)
+                {
+                    ref_vel += 0.224;
+                }
+                */
+	        vector<double> ptsx;
+	        vector<double> ptsy;
+	
+	        double ref_x = car_x;
+	        double ref_y = car_y;
+	        double ref_yaw = deg2rad(car_yaw);
+
+	        if(prev_size <2)
+	        {
+	            double prev_car_x = car_x - cos(car_yaw);
+	            double prev_car_y = car_y - sin(car_yaw); 
+	            
+                    ptsx.push_back(prev_car_x);
+	            ptsx.push_back(car_x);
+	            ptsy.push_back(prev_car_y);
+	            ptsy.push_back(car_y);
+	
+                }     
+	        else
+	        {
+	            ref_x  = previous_path_x[prev_size-1];
+	            ref_y =  previous_path_y[prev_size-1];
+	
+	            double  ref_x_prev = previous_path_x[prev_size-2];
+	            double  ref_y_prev = previous_path_y[prev_size-2];
+	            ref_yaw = atan2(ref_y - ref_y_prev,ref_x - ref_x_prev);
+	            ptsx.push_back(ref_x_prev);
+                    ptsx.push_back(ref_x);
+                    ptsy.push_back(ref_y_prev);
+                    ptsy.push_back(ref_y);
+	
+	        }   
+
+	        vector<double> next_wp0 = getXY(car_s + 30,(2+4*lane),map_waypoints_s, map_waypoints_x,map_waypoints_y); 
+	        vector<double> next_wp1 = getXY(car_s + 60,(2+4*lane),map_waypoints_s, map_waypoints_x,map_waypoints_y);
+	        vector<double> next_wp2 = getXY(car_s + 90,(2+4*lane),map_waypoints_s, map_waypoints_x,map_waypoints_y);
+
+	        ptsx.push_back(next_wp0[0]);
+	        ptsx.push_back(next_wp1[0]);
+ 	        ptsx.push_back(next_wp2[0]);
+
+                ptsy.push_back(next_wp0[1]);
+                ptsy.push_back(next_wp1[1]);
+                ptsy.push_back(next_wp2[1]);
+  
+	        // Change coordinates to car reference frame 
+	        for(int i=0; i<ptsx.size(); i++)
+	        {
+	            double shift_x =ptsx[i]-ref_x;
+	            double shift_y =ptsy[i]-ref_y;
+
+	            ptsx[i] = (shift_x*cos(0-ref_yaw) - shift_y*sin(0-ref_yaw));
+	            ptsy[i] = (shift_x*sin(0-ref_yaw) + shift_y*cos(0-ref_yaw));  
+	        } 
+                //xeate a spline
+	        tk::spline s;
+                //set(x,y) points to the spline
+	        s.set_points(ptsx,ptsy);
+	        
+	        for (int i = 0; i< previous_path_x.size(); i++) 
+	        {
+                    next_x_vals.push_back(previous_path_x[i]);
+                    next_y_vals.push_back(previous_path_y[i]);	
+	    
+	        }
+             
+                double target_x = 30.0;
+	        double target_y = s(target_x);
+	        double target_dist = sqrt(target_x*target_x + target_y*target_y);
+	
+	        double x_add_on = 0;
+
+                 for(int i = 1; i <= 50 - previous_path_x.size(); i++)
+                 { 
+                    if(too_close)
+                    {
+                        ref_vel -= 0.112;//use to be 0.224
+                       /*
+                        auto lane_pos = std::max_element(std::begin(lane_speeds), std::end(lane_speeds));
+
+                        int intended_lane = std::distance(std::begin(lane_speeds), lane_pos);
+                        //check for the new fastest lane
+                        if(intended_lane != lane){
+                            lane = intended_lane;
+                        }
+                        //car is in fastest lane and there is another car causing the vehicle to drive slower
+                        //keep lane functionality and flow behind other vehicle at suitable distance
+                        else{
+                            // ref_vel = check_speed;
+                        }
+                        */
+                         /*
+                         Vehicle ego_car = Vehicle(lane, car_s, car_speed, total_accel, state);
+                         ego_car.lanes_available = 3;
+                         ego_car.target_speed = 50;
+                         //initialize a map of predictions for the vehicles around ego_car
+                         map <int, vector<Vehicle>> predictions;
+                         for ( int j = 0; j < sensor_fusion.size(); j++)
+                         {
+                             double other_d = sensor_fusion[j][6];
+                             int other_car_lane;
+                             if(other_d >= 0.0 && other_d < 4.0){
+                                 other_car_lane = 0;
+                             }
+                             else if(other_d >= 4.0 && other_d < 8.0){
+                                 other_car_lane = 1;
+                             }
+                             else{
+                                    other_car_lane = 2;
+                             }
+                             double other_car_s = sensor_fusion[j][5];
+                             double other_vx = sensor_fusion[j][3];
+                             double other_vy = sensor_fusion[j][4];
+                             double other_car_speed = sqrt(other_vx*other_vx + other_vy*other_vy);
+                             double other_car_v = other_car_speed;
+                             double other_car_a = total_accel;
+                             string other_car_state = "KL";
+
+                             Vehicle other_car = Vehicle(other_car_lane, other_car_s, other_car_v, other_car_a, other_car_state);
+                             vector<Vehicle> preds = other_car.generate_predictions();
+                             predictions[j] = preds;
+                         }
+                         //set new values and state of ego car
+                         vector<Vehicle> data = ego_car.choose_next_state(predictions);
+                         ego_car.realize_next_state(data);
+                         //pass ego car state values to associated parameters
+                         cout << "Lane #: " << ego_car.lane << endl;
+                         //set car lane
+                         lane = ego_car.lane;
+                         //set state of car
+                         state = ego_car.state;
+                         cout << " New State: " << ego_car.state << endl;
+                         //state = ego_car.state;
+                         //set ref_vel
+                         cout << "New ref_vel: " << ego_car.v << endl;
+                         ref_vel = ego_car.v;
+                         */
+                         
+                    }
+                    
+                    else if(ref_vel < 49.5 && !too_close)
+                    { 
+                        state = "KL";
+                        ref_vel += 0.2;//use to be 0.224
+                    }
+                    double N = (target_dist/(0.02 * ref_vel/2.24));
+                    double x_point = x_add_on + (target_x)/N;
+	            double y_point = s(x_point);
+
+                    x_add_on  = x_point;
+
+                    double  x_ref = x_point;
+	            double  y_ref = y_point;
+
+	            x_point = (x_ref*cos(ref_yaw) - y_ref*sin(ref_yaw));
+	            y_point = (x_ref*sin(ref_yaw) + y_ref*cos(ref_yaw)); 
+                    x_point += ref_x;
+                    y_point += ref_y;
+
+	            next_x_vals.push_back(x_point);
+	            next_y_vals.push_back(y_point);
+
+	        }
+  
+                msgJson["next_x"] = next_x_vals;
           	msgJson["next_y"] = next_y_vals;
 
           	auto msg = "42[\"control\","+ msgJson.dump()+"]";
@@ -288,9 +631,11 @@ int main() {
   int port = 4567;
   if (h.listen(port)) {
     std::cout << "Listening to port " << port << std::endl;
-  } else {
-    std::cerr << "Failed to listen to port" << std::endl;
-    return -1;
+   }
+  else
+  {
+      std::cerr << "Failed to listen to port" << std::endl;
+      return -1;
   }
   h.run();
 }
